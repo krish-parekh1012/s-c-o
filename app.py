@@ -13,11 +13,28 @@ import requests
 import os
 
 # Optional LLM import (Gemini / Generative AI). If not available we gracefully fallback.
-try:
-    import google.generativeai as genai
-    HAVE_GENAI = True
-except Exception:
-    HAVE_GENAI = False
+# LLM support is optional. We try to import google.generativeai at runtime only if a key is present.
+HAVE_GENAI = False
+genai = None
+
+def try_init_genai():
+    """
+    Attempt to import google.generativeai dynamically.
+    If it's not installed on the environment, return False.
+    This keeps the build from failing on platforms where the package is unavailable.
+    """
+    global HAVE_GENAI, genai
+    if HAVE_GENAI:
+        return True
+    try:
+        import importlib
+        genai = importlib.import_module("google.generativeai")
+        HAVE_GENAI = True
+        return True
+    except Exception:
+        HAVE_GENAI = False
+        return False
+
 
 st.set_page_config(page_title="Sleep–Caffeine Oracle (India)", page_icon="☕🇮🇳", layout="wide")
 st.title("☕🔮 Sleep–Caffeine Balance Oracle — India tuned")
@@ -302,40 +319,60 @@ if submitted:
         "seed_creature": creature_seed,
         "instructions": "Return JSON only with keys: creature, creature_bio, oracle_text, rituals (list of 3), tips (list of 3). Tone: playful, India-savvy, avoid medical advice."
     }
-    ai_result = None
-    if HAVE_GENAI and "GEMINI_API_KEY" in st.secrets:
+  ai_result = None
+
+# Only attempt AI enrichment if user provided a GEMINI_API_KEY
+if "GEMINI_API_KEY" in st.secrets:
+    # Try to import the library at runtime (avoids build-time pip issues)
+    if not try_init_genai():
+        st.warning("AI library not installed in this environment; AI enrichment disabled. To enable, install 'google-generative-ai' or deploy a small proxy that calls the LLM.")
+    else:
         try:
+            # Configure and call the model
             genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
             model = genai.GenerativeModel("gemini-1.5-flash")
-            sys_prompt = ("You are the Sleep–Caffeine Oracle. Use the structured payload and produce a short India-aware creature summary "
-                          "and 3 practical rituals. Return strict JSON.")
+            sys_prompt = (
+                "You are the Sleep–Caffeine Oracle. Use the structured payload and produce a short India-aware creature summary "
+                "and 3 practical rituals. Return strict JSON."
+            )
             resp = model.generate_content(sys_prompt + "\n\n" + json.dumps(prompt_payload))
             raw = resp.text.strip()
+
+            # Robust JSON extraction: try direct parse, then attempt to extract the first JSON object substring
             try:
                 ai_result = json.loads(raw)
             except Exception:
-                s = raw.find("{"); e = raw.rfind("}")
-                ai_result = json.loads(raw[s:e+1])
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    ai_result = json.loads(raw[start:end+1])
+                else:
+                    # couldn't parse JSON out of model response
+                    st.warning("AI returned an unexpected response format; using deterministic fallback.")
+                    ai_result = None
+
         except Exception as e:
-            st.warning("AI enrichment attempted and failed; showing deterministic fallback.")
+            st.warning(f"AI enrichment attempted and failed: {str(e)} — showing deterministic fallback.")
             ai_result = None
-    if not ai_result:
-        ai_result = {
-            "creature": f"{creature_seed['label']} {creature_seed.get('emoji','')}",
-            "creature_bio": creature_seed["desc"],
-            "oracle_text": f"Peak at {peak_time}. Crash at {crash_time}. Chaos Score {chaos_score}.",
-            "rituals": [
-                "Drink 250–300 ml water after your next coffee.",
-                "Try a 15–20 minute low-light nap before the predicted crash.",
-                "Switch to tea or decaf after midday if chaos > 40."
-            ],
-            "tips": [
-                "Avoid mixing strong filter + cold coffee in the same afternoon.",
-                "Space chai and coffee by 3+ hours if possible.",
-                "Keep a small protein snack & water ready to blunt crashes."
-            ]
-        }
-    st.json(ai_result)
+
+# Fallback deterministic response (unchanged)
+if not ai_result:
+    ai_result = {
+        "creature": f"{creature_seed['label']} {creature_seed.get('emoji','')}",
+        "creature_bio": creature_seed["desc"],
+        "oracle_text": f"Peak at {peak_time}. Crash at {crash_time}. Chaos Score {chaos_score}.",
+        "rituals": [
+            "Drink 250–300 ml water after your next coffee.",
+            "Try a 15–20 minute low-light nap before the predicted crash.",
+            "Switch to tea or decaf after midday if chaos > 40."
+        ],
+        "tips": [
+            "Avoid mixing strong filter + cold coffee in the same afternoon.",
+            "Space chai and coffee by 3+ hours if possible.",
+            "Keep a small protein snack & water ready to blunt crashes."
+        ]
+    }
+
     # Prepare anonymized record (no PII)
     anon_record = {
         "timestamp_utc": datetime.utcnow().isoformat(),
