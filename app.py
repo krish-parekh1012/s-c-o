@@ -319,7 +319,7 @@ if submitted:
         "seed_creature": creature_seed,
         "instructions": "Return JSON only with keys: creature, creature_bio, oracle_text, rituals (list of 3), tips (list of 3). Tone: playful, India-savvy, avoid medical advice."
     }
-  ai_result = None
+ai_result = None
 
 # Only attempt AI enrichment if user provided a GEMINI_API_KEY
 if "GEMINI_API_KEY" in st.secrets:
